@@ -5,7 +5,7 @@
 # Description: Linux Fail2ban 管理脚本 (中文版)
 #              无需手动编辑配置文件，通过菜单管理封禁、白名单和参数。
 #
-# Author: Kequans & Gemini
+# Author: Kequans & ISFZY
 # License: MIT License
 # ==============================================================================
 
