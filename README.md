@@ -22,7 +22,7 @@ F2B Manager 是一个轻量级的 Shell 脚本，旨在简化 Linux 服务器上
 在您的服务器上执行以下命令下载并运行：# 下载脚本&赋予执行权限&运行脚本
 
 ```bash
-wget -O f2b.sh https://raw.githubusercontent.com/Kequans/fail2ban-panel/main/f2b_panel.sh && chmod +x f2b.sh && sudo ./f2b.sh
+wget -O f2b.sh https://raw.githubusercontent.com/Kequans/fail2ban-panel/main/f2b_panel_zh.sh && chmod +x f2b.sh && sudo ./f2b.sh
 ```
 ——————————————————————————————————————————————————————————————————————————————————————————————————————————————————
 
