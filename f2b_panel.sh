@@ -7,7 +7,7 @@
 #
 # Author: [Kequans] Thank https://github.com/ISFZY/Xray-Auto
 # License: MIT License
-# Repository: [Your GitHub Repo URL]
+# Repository: [https://github.com/Kequans/fail2ban-panel]
 # ==============================================================================
 
 # --- Global Variables ---
