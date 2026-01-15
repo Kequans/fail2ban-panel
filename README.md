@@ -12,10 +12,9 @@ F2B Manager 是一个轻量级的 Shell 脚本，旨在简化 Linux 服务器上
 - 🚀 **自动部署**：智能检测环境，如果系统未安装 Fail2ban，脚本将自动完成安装与初始化（支持 Debian/Ubuntu/CentOS），并自动修复日志缺失问题。
 
 ## ✨ 界面展示
-<img width="350" height="250" alt="image" src="https://github.com/user-attachments/assets/641cacd8-1c71-4f94-8b36-6f48808d311d" />
+<img width="350" height="250" alt="image" src="https://github.com/user-attachments/assets/6b69e491-9636-47ba-99d9-a4911df351dc" />
 
-<img width="400" height="200" alt="image" src="https://github.com/user-attachments/assets/1d8f534c-e0f9-4daf-913b-d13014eb3a3d" />
-
+<img width="400" height="200" alt="image" src="https://github.com/user-attachments/assets/c4df1851-afbb-47e1-8188-05f4e3e71f22" />
 
 ## 🚀 快速开始
 
@@ -29,6 +28,12 @@ wget -O f2b.sh https://raw.githubusercontent.com/Kequans/fail2ban-panel/main/f2b
 # F2B Manager (Fail2ban Shell Panel) 🇺🇸English
 
 A lightweight, standalone Shell script to manage Fail2ban on Linux servers. No more manually editing config files!
+
+## UI
+
+<img width="350" height="250" alt="image" src="https://github.com/user-attachments/assets/641cacd8-1c71-4f94-8b36-6f48808d311d" />
+
+<img width="400" height="200" alt="image" src="https://github.com/user-attachments/assets/1d8f534c-e0f9-4daf-913b-d13014eb3a3d" />
 
 ## Features
 
