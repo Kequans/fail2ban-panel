@@ -1,13 +1,13 @@
 #!/bin/bash
 
 # ==============================================================================
-# Fail2ban Interactive Manager (F2B Panel)
-# Description: A user-friendly Shell script to manage Fail2ban configuration,
-#              bans, whitelists, and logs without editing config files manually.
+# Fail2ban Interactive Manager (F2B Panel) - English Version
+# Description: Fail2ban Management Script for Linux
+#              Manage bans, whitelists, and parameters without manual config editing.
+#              v1.3 Fixes: Restart detection, Scope limitation, Multi-line config bug.
 #
-# Author: [Kequans] Thank https://github.com/ISFZY/Xray-Auto
+# Author: Kequans & ISFZY
 # License: MIT License
-# Repository: [https://github.com/Kequans/fail2ban-panel]
 # ==============================================================================
 
 # --- Global Variables ---
@@ -20,39 +20,35 @@ PLAIN="\033[0m"
 
 JAIL_CONF="/etc/fail2ban/jail.local"
 LOG_FILE="/var/log/fail2ban.log"
+TARGET_JAIL="sshd"
 
-# --- Pre-flight Checks ---
+# --- Pre-checks ---
 
-# Check Root
 [[ $EUID -ne 0 ]] && echo -e "${RED}Error:${PLAIN} This script must be run as root!" && exit 1
 
-# Check if Fail2ban is installed
 check_install() {
     if ! command -v fail2ban-client >/dev/null 2>&1; then
-        echo -e "${YELLOW}Fail2ban is not installed on this system.${PLAIN}"
-        read -p "Do you want to install Fail2ban and Rsyslog now? (y/n): " install_confirm
+        echo -e "${YELLOW}Fail2ban service not detected.${PLAIN}"
+        read -p "Install Fail2ban and Rsyslog now? (y/n): " install_confirm
         if [[ "$install_confirm" == "y" ]]; then
             echo -e "${BLUE}Installing Fail2ban and Rsyslog...${PLAIN}"
             
-            # Detect Package Manager (Simple version)
             if command -v apt-get >/dev/null 2>&1; then
                 apt-get update && apt-get install -y fail2ban rsyslog
             elif command -v yum >/dev/null 2>&1; then
                 yum install -y fail2ban rsyslog
             else
-                echo -e "${RED}Unsupported package manager. Please install Fail2ban manually.${PLAIN}"
+                echo -e "${RED}Unrecognized package manager. Please install Fail2ban manually.${PLAIN}"
                 exit 1
             fi
 
-            # Ensure log file exists for sshd jail
             if [ ! -f /var/log/auth.log ]; then touch /var/log/auth.log; fi
             systemctl enable rsyslog && systemctl start rsyslog
             
-            # Initialize jail.local if not exists
             if [ ! -f "$JAIL_CONF" ]; then
-                echo -e "${BLUE}Initializing default jail.local...${PLAIN}"
-                cat > "$JAIL_CONF" << 'EOF'
-[sshd]
+                echo -e "${BLUE}Initializing default configuration (jail.local)...${PLAIN}"
+                cat > "$JAIL_CONF" << EOF
+[${TARGET_JAIL}]
 enabled = true
 port = 22
 filter = sshd
@@ -68,71 +64,66 @@ EOF
             
             systemctl enable fail2ban
             systemctl restart fail2ban
-            echo -e "${GREEN}Installation Complete!${PLAIN}"
+            echo -e "${GREEN}Installation and startup complete!${PLAIN}"
             sleep 2
         else
-            echo -e "${RED}Aborted.${PLAIN}"
+            echo -e "${RED}Installation cancelled.${PLAIN}"
             exit 0
         fi
     fi
     
-    # Check config file existence
     if [ ! -f "$JAIL_CONF" ]; then
         echo -e "${YELLOW}Warning: $JAIL_CONF not found.${PLAIN}"
-        echo -e "${BLUE}Creating a basic configuration...${PLAIN}"
+        echo -e "${BLUE}Creating configuration from default template...${PLAIN}"
         cp /etc/fail2ban/jail.conf "$JAIL_CONF"
     fi
 }
 
 # --- Helper Functions ---
 
-# Read config value
 get_conf() {
     local key=$1
-    # Extract value from jail.local, handle spaces
-    grep "^${key}\s*=" "$JAIL_CONF" | awk -F'=' '{print $2}' | tr -d ' '
+    sed -n "/^\[$TARGET_JAIL\]/,/^\[/p" "$JAIL_CONF" | grep "^${key}\s*=" | tail -n 1 | awk -F'=' '{print $2}' | tr -d ' '
 }
 
-# Write config value
 set_conf() {
     local key=$1; local val=$2
-    if grep -q "^${key}\s*=" "$JAIL_CONF"; then
-        sed -i "s/^${key}\s*=.*/${key} = ${val}/" "$JAIL_CONF"
+    if sed -n "/^\[$TARGET_JAIL\]/,/^\[/p" "$JAIL_CONF" | grep -q "^${key}\s*="; then
+        sed -i "/^\[$TARGET_JAIL\]/,/^\[/ s/^${key}\s*=.*/${key} = ${val}/" "$JAIL_CONF"
     else
-        # If key doesn't exist, insert it after [sshd] or at top
-        if grep -q "\[sshd\]" "$JAIL_CONF"; then
-            sed -i "/\[sshd\]/a ${key} = ${val}" "$JAIL_CONF"
-        else
-            echo "${key} = ${val}" >> "$JAIL_CONF"
-        fi
+        sed -i "/^\[$TARGET_JAIL\]/a ${key} = ${val}" "$JAIL_CONF"
     fi
 }
 
-# Restart and verify
+# Fixed restart function with loop check
 restart_f2b() {
     echo -e "${BLUE}Reloading Fail2ban configuration...${PLAIN}"
     systemctl restart fail2ban
-    sleep 1
-    if fail2ban-client ping >/dev/null 2>&1; then
-        echo -e "${GREEN}Success! Configuration applied.${PLAIN}"
-    else
-        echo -e "${RED}Failed to restart Fail2ban.${PLAIN}"
-        echo -e "${YELLOW}Please check configuration syntax or system logs.${PLAIN}"
-    fi
+    
+    # Check 5 times, wait 1 sec each time
+    for i in {1..5}; do
+        if fail2ban-client ping >/dev/null 2>&1; then
+            echo -e "${GREEN}Success! Configuration applied.${PLAIN}"
+            read -n 1 -s -r -p "Press any key to continue..."
+            return
+        fi
+        sleep 1
+    done
+
+    echo -e "${RED}Fail2ban restart timed out or failed.${PLAIN}"
+    echo -e "${YELLOW}Please run 'systemctl status fail2ban' manually to troubleshoot.${PLAIN}"
     read -n 1 -s -r -p "Press any key to continue..."
 }
 
-# Get Service Status
 get_status() {
     if fail2ban-client ping >/dev/null 2>&1; then
-        local count=$(fail2ban-client status sshd 2>/dev/null | grep "Currently banned" | grep -o "[0-9]*")
-        echo -e "${GREEN}Running${PLAIN} | Banned IPs: ${RED}${count:-0}${PLAIN}"
+        local count=$(fail2ban-client status "$TARGET_JAIL" 2>/dev/null | grep "Currently banned" | grep -o "[0-9]*")
+        echo -e "${GREEN}Running (Active)${PLAIN} | Currently Banned: ${RED}${count:-0}${PLAIN}"
     else
         echo -e "${RED}Stopped${PLAIN}"
     fi
 }
 
-# Format units for display
 fmt_unit() {
     local val=$1; local type=$2
     if [[ "$val" =~ ^[0-9]+$ ]]; then
@@ -144,26 +135,25 @@ fmt_unit() {
     fi
 }
 
-# Validation
 validate_time() { [[ "$1" =~ ^[0-9]+[smhdw]?$ ]]; }
 validate_int() { [[ "$1" =~ ^[0-9]+(\.[0-9]+)?$ ]]; }
 
-# --- Action Functions ---
+# --- Feature Modules ---
 
 change_param() {
     local name=$1; local key=$2; local type=$3
     local current=$(get_conf "$key")
-    echo -e "\n${BLUE}Modify: ${name}${PLAIN}"
-    echo -e "Current: ${GREEN}$(fmt_unit "$current" "$type")${PLAIN}"
-    if [ "$type" == "time" ]; then echo -e "${GRAY}(Suffix: s=sec, m=min, h=hour, d=day)${PLAIN}"; fi
+    echo -e "\n${BLUE}Modifying: ${name}${PLAIN}"
+    echo -e "Current Value: ${GREEN}$(fmt_unit "$current" "$type")${PLAIN}"
+    if [ "$type" == "time" ]; then echo -e "${GRAY}(Suffixes: s=sec, m=min, h=hour, d=day)${PLAIN}"; fi
     
     while true; do
-        read -p "New Value (Enter to cancel): " new_val
+        read -p "Enter new value (Leave empty to cancel): " new_val
         if [ -z "$new_val" ]; then return; fi
         if [ "$type" == "time" ] && validate_time "$new_val"; then break; fi
         if [ "$type" == "int" ] && validate_int "$new_val"; then break; fi
         if [ "$type" == "factor" ] && validate_int "$new_val"; then break; fi
-        echo -e "${RED}Invalid format. Try again.${PLAIN}"
+        echo -e "${RED}Invalid format. Please try again.${PLAIN}"
     done
     
     set_conf "$key" "$new_val"
@@ -171,61 +161,79 @@ change_param() {
 }
 
 toggle_service() {
-    echo -e "\n${BLUE}--- Service Control ---${PLAIN}"
+    echo -e "\n${BLUE}--- Service Toggle ---${PLAIN}"
     if fail2ban-client ping >/dev/null 2>&1; then
-        read -p "Stop and Disable Fail2ban? (y/n): " confirm
+        read -p "Stop and disable Fail2ban? (y/n): " confirm
         if [[ "$confirm" == "y" ]]; then 
             systemctl stop fail2ban; systemctl disable fail2ban
-            echo -e "${RED}Service Stopped.${PLAIN}"
+            echo -e "${RED}Service stopped.${PLAIN}"
         fi
     else
-        read -p "Start and Enable Fail2ban? (y/n): " confirm
+        read -p "Enable and start Fail2ban? (y/n): " confirm
         if [[ "$confirm" == "y" ]]; then 
-            systemctl enable fail2ban; systemctl start fail2ban
-            echo -e "${GREEN}Service Started.${PLAIN}"
+            echo -e "${BLUE}Starting service (please wait)...${PLAIN}"
+            systemctl enable fail2ban
+            systemctl start fail2ban
+            
+            # Loop check for startup
+            for i in {1..5}; do
+                if fail2ban-client ping >/dev/null 2>&1; then
+                    echo -e "${GREEN}Service started.${PLAIN}"
+                    read -n 1 -s -r -p "Press any key to continue..."
+                    return
+                fi
+                sleep 1
+            done
+            
+            echo -e "${RED}Startup failed or timed out.${PLAIN}"
+            echo -e "${YELLOW}Please run: 'systemctl status fail2ban' to view errors.${PLAIN}"
         fi
     fi
     read -n 1 -s -r -p "Press any key to continue..."
 }
 
 unban_ip() {
-    echo -e "\n${BLUE}--- Unban Manager ---${PLAIN}"
-    local banned_list=$(fail2ban-client status sshd 2>/dev/null | grep "Banned IP list" | awk -F':' '{print $2}' | sed 's/^[ \t]*//')
+    echo -e "\n${BLUE}--- Unban IP ---${PLAIN}"
+    local banned_list=$(fail2ban-client status "$TARGET_JAIL" 2>/dev/null | grep "Banned IP list" | awk -F':' '{print $2}' | sed 's/^[ \t]*//')
     [ -z "$banned_list" ] && banned_list="None"
 
-    echo -e "Banned IPs: ${RED}${banned_list}${PLAIN}"
-    read -p "IP to Unban (Enter to cancel): " target_ip
+    echo -e "Current Banned List: ${RED}${banned_list}${PLAIN}"
+    read -p "Enter IP to unban (Empty to cancel): " target_ip
     [ -z "$target_ip" ] && return
     
-    fail2ban-client set sshd unbanip "$target_ip"
-    if [ $? -eq 0 ]; then echo -e "${GREEN}Unbanned: $target_ip${PLAIN}"; else echo -e "${RED}Failed.${PLAIN}"; fi
+    fail2ban-client set "$TARGET_JAIL" unbanip "$target_ip"
+    if [ $? -eq 0 ]; then echo -e "${GREEN}Unbanned successfully: $target_ip${PLAIN}"; else echo -e "${RED}Operation failed.${PLAIN}"; fi
     read -n 1 -s -r -p "Press any key to continue..."
 }
 
 add_whitelist() {
-    echo -e "\n${BLUE}--- Whitelist Manager ---${PLAIN}"
-    local current_list=$(grep "^ignoreip" "$JAIL_CONF" | awk -F'=' '{print $2}' | sed 's/^[ \t]*//;s/[ \t]*$//')
+    echo -e "\n${BLUE}--- Whitelist Management ---${PLAIN}"
+    local current_list=$(get_conf "ignoreip")
     
-    echo -e "Whitelisted: ${YELLOW}${current_list:-None}${PLAIN}"
+    echo -e "Current Whitelist (sshd): ${YELLOW}${current_list:-Inherited global or None}${PLAIN}"
     local current_ip=$(echo $SSH_CLIENT | awk '{print $1}')
     
-    read -p "IP to Whitelist (Enter for current IP ${current_ip}): " input_ip
+    read -p "Enter IP to whitelist (Default local: ${current_ip}): " input_ip
     [ -z "$input_ip" ] && input_ip="$current_ip"
-    [ -z "$input_ip" ] && echo -e "${RED}Cannot detect IP.${PLAIN}" && return
+    [ -z "$input_ip" ] && echo -e "${RED}Unable to get IP.${PLAIN}" && return
     
     if echo "$current_list" | grep -Fq "$input_ip"; then
-        echo -e "${YELLOW}IP already in whitelist.${PLAIN}"
+        echo -e "${YELLOW}IP is already whitelisted.${PLAIN}"
     else
-        sed -i "/^ignoreip/ s/$/ ${input_ip}/" "$JAIL_CONF"
+        if [ -z "$current_list" ]; then
+            set_conf "ignoreip" "$input_ip"
+        else
+            set_conf "ignoreip" "$current_list $input_ip"
+        fi
         restart_f2b
     fi
 }
 
 view_logs() {
     clear
-    echo -e "${BLUE}=== Audit Logs (Last 20 Actions) ===${PLAIN}"
+    echo -e "${BLUE}=== Audit Logs (Last 20 lines) ===${PLAIN}"
     if [ ! -f "$LOG_FILE" ]; then
-        echo -e "${YELLOW}Log file not found at $LOG_FILE${PLAIN}"
+        echo -e "${YELLOW}Log file not found: $LOG_FILE${PLAIN}"
     else
         grep -E "(Ban|Unban)" "$LOG_FILE" 2>/dev/null | tail -n 20 | \
         awk '{
@@ -239,8 +247,6 @@ view_logs() {
     read -n 1 -s -r -p "Press any key to return..."
 }
 
-# --- Menus ---
-
 menu_exponential() {
     while true; do
         clear
@@ -249,19 +255,19 @@ menu_exponential() {
         local max=$(get_conf "bantime.maxtime")
         [ "$inc" == "true" ] && S_INC="${GREEN}ON${PLAIN}" || S_INC="${RED}OFF${PLAIN}"
 
-        echo -e "${BLUE}=== Advanced: Exponential Ban ===${PLAIN}"
-        echo -e "Description: Increase ban time for repeat offenders."
+        echo -e "${BLUE}=== Advanced: Exponential Ban Settings (sshd) ===${PLAIN}"
+        echo -e "Description: Ban time increases exponentially for repeated offenders."
         echo -e "-------------------------------------------"
-        echo -e "  1. Exponential Mode   [${S_INC}]"
-        echo -e "  2. Increase Factor    [${YELLOW}${fac:-None}${PLAIN}] $(fmt_unit "${fac}" "factor")"
-        echo -e "  3. Max Ban Time       [${YELLOW}${max:-None}${PLAIN}] $(fmt_unit "${max}" "time")"
+        echo -e "  1. Increment Mode   [${S_INC}]"
+        echo -e "  2. Growth Factor    [${YELLOW}${fac:-Not Set}${PLAIN}] $(fmt_unit "${fac}" "factor")"
+        echo -e "  3. Max Ban Time     [${YELLOW}${max:-Not Set}${PLAIN}] $(fmt_unit "${max}" "time")"
         echo -e "-------------------------------------------"
         echo -e "  0. Back"
         echo -e ""
         read -p "Select [0-3]: " sc
         case "$sc" in
             1) [ "$inc" == "true" ] && ns="false" || ns="true"; set_conf "bantime.increment" "$ns"; restart_f2b ;;
-            2) change_param "Increase Factor" "bantime.factor" "factor" ;;
+            2) change_param "Growth Factor (Multiplier)" "bantime.factor" "factor" ;;
             3) change_param "Max Ban Time" "bantime.maxtime" "time" ;;
             0) return ;;
         esac
@@ -275,13 +281,13 @@ menu_main() {
         VAL_MAX=$(get_conf "maxretry"); VAL_BAN=$(get_conf "bantime"); VAL_FIND=$(get_conf "findtime")
         
         echo -e "${BLUE}################################################${PLAIN}"
-        echo -e "${BLUE}#            Fail2ban Manager (v1.0)           #${PLAIN}"
+        echo -e "${BLUE}#           Fail2ban Manager (v1.3 EN)         #${PLAIN}"
         echo -e "${BLUE}################################################${PLAIN}"
         echo -e "  Status: $(get_status)"
         echo -e "------------------------------------------------"
         echo -e "  1. Max Retries      [${YELLOW}${VAL_MAX}${PLAIN}]"
-        echo -e "  2. Ban Time         [${YELLOW}${VAL_BAN}${PLAIN}] $(fmt_unit "${VAL_BAN}" "time")"
-        echo -e "  3. Find Time        [${YELLOW}${VAL_FIND}${PLAIN}] $(fmt_unit "${VAL_FIND}" "time")"
+        echo -e "  2. Initial Ban Time [${YELLOW}${VAL_BAN}${PLAIN}] $(fmt_unit "${VAL_BAN}" "time")"
+        echo -e "  3. Find Time Window [${YELLOW}${VAL_FIND}${PLAIN}] $(fmt_unit "${VAL_FIND}" "time")"
         echo -e "------------------------------------------------"
         echo -e "  4. Unban IP"
         echo -e "  5. Add to Whitelist"
@@ -295,8 +301,8 @@ menu_main() {
 
         case "$choice" in
             1) change_param "Max Retries" "maxretry" "int" ;;
-            2) change_param "Ban Time" "bantime"  "time" ;;
-            3) change_param "Find Time" "findtime" "time" ;;
+            2) change_param "Initial Ban Time" "bantime"  "time" ;;
+            3) change_param "Find Time Window" "findtime" "time" ;;
             4) unban_ip ;;
             5) add_whitelist ;;
             6) view_logs ;;
@@ -308,5 +314,4 @@ menu_main() {
     done
 }
 
-# --- Start ---
 menu_main
