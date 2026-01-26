@@ -3,7 +3,7 @@
 # ==============================================================================
 # Fail2ban Interactive Manager (F2B Panel) - Chinese Version
 # Description: Linux Fail2ban 管理脚本 (中文版)
-#              无需手动编辑配置文件，通过菜单管理封禁、白名单和参数。
+#              v1.3: 全面修复重启检测逻辑，解决配置正确但提示失败的误报问题。
 #
 # Author: Kequans & ISFZY
 # License: MIT License
@@ -19,13 +19,12 @@ PLAIN="\033[0m"
 
 JAIL_CONF="/etc/fail2ban/jail.local"
 LOG_FILE="/var/log/fail2ban.log"
+TARGET_JAIL="sshd"
 
 # --- 预检步骤 ---
 
-# 检查 Root 权限
 [[ $EUID -ne 0 ]] && echo -e "${RED}错误:${PLAIN} 必须使用 root 用户运行此脚本！" && exit 1
 
-# 检查是否安装 Fail2ban
 check_install() {
     if ! command -v fail2ban-client >/dev/null 2>&1; then
         echo -e "${YELLOW}未检测到 Fail2ban 服务。${PLAIN}"
@@ -33,7 +32,6 @@ check_install() {
         if [[ "$install_confirm" == "y" ]]; then
             echo -e "${BLUE}正在安装 Fail2ban 和 Rsyslog...${PLAIN}"
             
-            # 简单的包管理器检测
             if command -v apt-get >/dev/null 2>&1; then
                 apt-get update && apt-get install -y fail2ban rsyslog
             elif command -v yum >/dev/null 2>&1; then
@@ -43,15 +41,13 @@ check_install() {
                 exit 1
             fi
 
-            # 确保 sshd 日志文件存在
             if [ ! -f /var/log/auth.log ]; then touch /var/log/auth.log; fi
             systemctl enable rsyslog && systemctl start rsyslog
             
-            # 初始化 jail.local
             if [ ! -f "$JAIL_CONF" ]; then
                 echo -e "${BLUE}正在初始化默认配置 (jail.local)...${PLAIN}"
-                cat > "$JAIL_CONF" << 'EOF'
-[sshd]
+                cat > "$JAIL_CONF" << EOF
+[${TARGET_JAIL}]
 enabled = true
 port = 22
 filter = sshd
@@ -75,7 +71,6 @@ EOF
         fi
     fi
     
-    # 检查配置文件是否存在
     if [ ! -f "$JAIL_CONF" ]; then
         echo -e "${YELLOW}警告: 未找到 $JAIL_CONF${PLAIN}"
         echo -e "${BLUE}正在根据默认模板创建配置...${PLAIN}"
@@ -85,53 +80,50 @@ EOF
 
 # --- 辅助函数 ---
 
-# 读取配置值
 get_conf() {
     local key=$1
-    # 提取值并去除空格
-    grep "^${key}\s*=" "$JAIL_CONF" | awk -F'=' '{print $2}' | tr -d ' '
+    sed -n "/^\[$TARGET_JAIL\]/,/^\[/p" "$JAIL_CONF" | grep "^${key}\s*=" | tail -n 1 | awk -F'=' '{print $2}' | tr -d ' '
 }
 
-# 写入配置值
 set_conf() {
     local key=$1; local val=$2
-    if grep -q "^${key}\s*=" "$JAIL_CONF"; then
-        sed -i "s/^${key}\s*=.*/${key} = ${val}/" "$JAIL_CONF"
+    if sed -n "/^\[$TARGET_JAIL\]/,/^\[/p" "$JAIL_CONF" | grep -q "^${key}\s*="; then
+        sed -i "/^\[$TARGET_JAIL\]/,/^\[/ s/^${key}\s*=.*/${key} = ${val}/" "$JAIL_CONF"
     else
-        # 如果 key 不存在，尝试插入到 [sshd] 下方或文件末尾
-        if grep -q "\[sshd\]" "$JAIL_CONF"; then
-            sed -i "/\[sshd\]/a ${key} = ${val}" "$JAIL_CONF"
-        else
-            echo "${key} = ${val}" >> "$JAIL_CONF"
-        fi
+        sed -i "/^\[$TARGET_JAIL\]/a ${key} = ${val}" "$JAIL_CONF"
     fi
 }
 
-# 重启并验证
+# 修复版重启函数：增加循环等待逻辑
 restart_f2b() {
     echo -e "${BLUE}正在重载 Fail2ban 配置...${PLAIN}"
     systemctl restart fail2ban
-    sleep 1
-    if fail2ban-client ping >/dev/null 2>&1; then
-        echo -e "${GREEN}成功！配置已生效。${PLAIN}"
-    else
-        echo -e "${RED}Fail2ban 重启失败。${PLAIN}"
-        echo -e "${YELLOW}请检查配置文件语法或系统日志。${PLAIN}"
-    fi
+    
+    # 循环检查 5 次，每次等待 1 秒，防止误报
+    for i in {1..5}; do
+        if fail2ban-client ping >/dev/null 2>&1; then
+            echo -e "${GREEN}成功！配置已生效。${PLAIN}"
+            read -n 1 -s -r -p "按任意键继续..."
+            return
+        fi
+        sleep 1
+    done
+
+    # 如果5秒后还没起来，才报失败
+    echo -e "${RED}Fail2ban 重启超时或失败。${PLAIN}"
+    echo -e "${YELLOW}请手动运行 'systemctl status fail2ban' 排查错误。${PLAIN}"
     read -n 1 -s -r -p "按任意键继续..."
 }
 
-# 获取服务状态
 get_status() {
     if fail2ban-client ping >/dev/null 2>&1; then
-        local count=$(fail2ban-client status sshd 2>/dev/null | grep "Currently banned" | grep -o "[0-9]*")
+        local count=$(fail2ban-client status "$TARGET_JAIL" 2>/dev/null | grep "Currently banned" | grep -o "[0-9]*")
         echo -e "${GREEN}运行中 (Active)${PLAIN} | 当前封禁数: ${RED}${count:-0}${PLAIN}"
     else
         echo -e "${RED}已停止 (Stopped)${PLAIN}"
     fi
 }
 
-# 格式化单位显示
 fmt_unit() {
     local val=$1; local type=$2
     if [[ "$val" =~ ^[0-9]+$ ]]; then
@@ -143,7 +135,6 @@ fmt_unit() {
     fi
 }
 
-# 校验函数
 validate_time() { [[ "$1" =~ ^[0-9]+[smhdw]?$ ]]; }
 validate_int() { [[ "$1" =~ ^[0-9]+(\.[0-9]+)?$ ]]; }
 
@@ -180,8 +171,22 @@ toggle_service() {
     else
         read -p "是否启用并启动 Fail2ban? (y/n): " confirm
         if [[ "$confirm" == "y" ]]; then 
-            systemctl enable fail2ban; systemctl start fail2ban
-            echo -e "${GREEN}服务已启动。${PLAIN}"
+            echo -e "${BLUE}正在启动服务 (请稍候)...${PLAIN}"
+            systemctl enable fail2ban
+            systemctl start fail2ban
+            
+            # 循环检查启动状态
+            for i in {1..5}; do
+                if fail2ban-client ping >/dev/null 2>&1; then
+                    echo -e "${GREEN}服务已启动。${PLAIN}"
+                    read -n 1 -s -r -p "按任意键继续..."
+                    return
+                fi
+                sleep 1
+            done
+            
+            echo -e "${RED}启动失败或超时。${PLAIN}"
+            echo -e "${YELLOW}请运行: systemctl status fail2ban 查看具体错误。${PLAIN}"
         fi
     fi
     read -n 1 -s -r -p "按任意键继续..."
@@ -189,23 +194,23 @@ toggle_service() {
 
 unban_ip() {
     echo -e "\n${BLUE}--- 手动解封 IP ---${PLAIN}"
-    local banned_list=$(fail2ban-client status sshd 2>/dev/null | grep "Banned IP list" | awk -F':' '{print $2}' | sed 's/^[ \t]*//')
+    local banned_list=$(fail2ban-client status "$TARGET_JAIL" 2>/dev/null | grep "Banned IP list" | awk -F':' '{print $2}' | sed 's/^[ \t]*//')
     [ -z "$banned_list" ] && banned_list="无"
 
     echo -e "当前被封禁列表: ${RED}${banned_list}${PLAIN}"
     read -p "输入要解封的 IP (留空取消): " target_ip
     [ -z "$target_ip" ] && return
     
-    fail2ban-client set sshd unbanip "$target_ip"
+    fail2ban-client set "$TARGET_JAIL" unbanip "$target_ip"
     if [ $? -eq 0 ]; then echo -e "${GREEN}解封成功: $target_ip${PLAIN}"; else echo -e "${RED}操作失败。${PLAIN}"; fi
     read -n 1 -s -r -p "按任意键继续..."
 }
 
 add_whitelist() {
     echo -e "\n${BLUE}--- 白名单管理 ---${PLAIN}"
-    local current_list=$(grep "^ignoreip" "$JAIL_CONF" | awk -F'=' '{print $2}' | sed 's/^[ \t]*//;s/[ \t]*$//')
+    local current_list=$(get_conf "ignoreip")
     
-    echo -e "当前白名单: ${YELLOW}${current_list:-无}${PLAIN}"
+    echo -e "当前白名单 (sshd): ${YELLOW}${current_list:-继承全局或无}${PLAIN}"
     local current_ip=$(echo $SSH_CLIENT | awk '{print $1}')
     
     read -p "输入要放行的 IP (回车默认本机 ${current_ip}): " input_ip
@@ -215,7 +220,11 @@ add_whitelist() {
     if echo "$current_list" | grep -Fq "$input_ip"; then
         echo -e "${YELLOW}该 IP 已在白名单中。${PLAIN}"
     else
-        sed -i "/^ignoreip/ s/$/ ${input_ip}/" "$JAIL_CONF"
+        if [ -z "$current_list" ]; then
+            set_conf "ignoreip" "$input_ip"
+        else
+            set_conf "ignoreip" "$current_list $input_ip"
+        fi
         restart_f2b
     fi
 }
@@ -238,8 +247,6 @@ view_logs() {
     read -n 1 -s -r -p "按任意键返回..."
 }
 
-# --- 菜单逻辑 ---
-
 menu_exponential() {
     while true; do
         clear
@@ -248,7 +255,7 @@ menu_exponential() {
         local max=$(get_conf "bantime.maxtime")
         [ "$inc" == "true" ] && S_INC="${GREEN}开启${PLAIN}" || S_INC="${RED}关闭${PLAIN}"
 
-        echo -e "${BLUE}=== 高级: 指数封禁设置 ===${PLAIN}"
+        echo -e "${BLUE}=== 高级: 指数封禁设置 (针对 sshd) ===${PLAIN}"
         echo -e "说明: 对重复犯错的 IP 封禁时间成倍增加。"
         echo -e "-------------------------------------------"
         echo -e "  1. 递增模式开关   [${S_INC}]"
@@ -274,7 +281,7 @@ menu_main() {
         VAL_MAX=$(get_conf "maxretry"); VAL_BAN=$(get_conf "bantime"); VAL_FIND=$(get_conf "findtime")
         
         echo -e "${BLUE}################################################${PLAIN}"
-        echo -e "${BLUE}#            Fail2ban 管理面板 (v1.0)          #${PLAIN}"
+        echo -e "${BLUE}#            Fail2ban 管理面板 (v1.3)          #${PLAIN}"
         echo -e "${BLUE}################################################${PLAIN}"
         echo -e "  状态: $(get_status)"
         echo -e "------------------------------------------------"
@@ -307,5 +314,4 @@ menu_main() {
     done
 }
 
-# --- 启动脚本 ---
 menu_main
