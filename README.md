@@ -23,6 +23,24 @@ F2B Manager 是一个轻量级的 Shell 脚本，旨在简化 Linux 服务器上
 ```bash
 wget -O f2b.sh https://raw.githubusercontent.com/Kequans/fail2ban-panel/main/f2b_panel_zh.sh && chmod +x f2b.sh && sudo ./f2b.sh
 ```
+## 更新日志（v1.3）的详细内容：
+### 1. 修复显示错乱 Bug (针对 openEuler/CentOS)
+
+问题：在某些系统上，配置文件中存在重复的参数定义，导致脚本读取到多行数据，撑破菜单界面。
+
+修复：修改读取逻辑，强制只读取配置文件的最后一行生效值，确保菜单显示整洁。
+
+### 2. 限制修改范围 (防止误伤)
+
+问题：旧版本使用全局替换，修改 maxretry 会同时改变 Nginx、Apache 等所有模块的设置。
+
+修复：脚本现在通过 [sshd] 标签锁定范围，仅修改 SSH 相关的配置区块，不影响其他服务。
+
+### 3. 修复“重启失败”误报
+
+问题：Fail2ban 重启需要几秒钟加载，脚本检查速度太快，导致服务明明启动成功却提示“失败”。
+
+修复：在重启和启动功能中增加了智能轮询机制（循环检查 5 次，每次 1 秒）。脚本会耐心等待服务就绪，彻底消除了假警报。
 ——————————————————————————————————————————————————————————————————————————————————————————————————————————————————
 
 # F2B Manager (Fail2ban Shell Panel) 🇺🇸English
@@ -51,3 +69,21 @@ Download and run the script:
 ```bash
 wget -O f2b.sh https://raw.githubusercontent.com/Kequans/fail2ban-panel/main/f2b_panel.sh && chmod +x f2b.sh && sudo ./f2b.sh
 ```
+## Update log
+### 1. Fixed Display Bug (for openEuler/CentOS)
+
+Issue: On some systems, duplicate parameter definitions in the config file caused the script to read multiple lines, breaking the menu layout.
+
+Fix: Updated the read logic to force fetching only the last effective line, ensuring a clean menu display.
+
+### 2. Scoped Configuration (Preventing Side Effects)
+
+Issue: The previous version used global replacement. Changing maxretry would accidentally alter settings for all jails (e.g., Nginx, Apache).
+
+Fix: The script now locks the scope to the [sshd] block. It only modifies SSH-related configurations, leaving other services untouched.
+
+### 3. Fixed "Restart Failed" False Positives
+
+Issue: Fail2ban takes a few seconds to reload. The script checked the status too quickly, reporting "Failed" even when the service started successfully.
+
+Fix: Implemented a smart polling mechanism (checks 5 times with a 1-second interval) for restart and start actions. The script now waits for the service to be ready, eliminating false alarms.
